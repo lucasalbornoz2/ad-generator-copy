@@ -11,6 +11,15 @@ GEMINI_API_KEY = (
     or os.environ.get("GEMINI_API_KEY", "")
 )
 
+SUPABASE_URL = (
+    _secrets.get("SUPABASE_URL")
+    or os.environ.get("SUPABASE_URL", "")
+)
+SUPABASE_KEY = (
+    _secrets.get("SUPABASE_KEY")
+    or os.environ.get("SUPABASE_KEY", "")
+)
+
 BRAND_BOOK_PDF = os.environ.get(
     "BRAND_BOOK_PDF",
     "/Users/lucasalbornoz/Downloads/Brand book Skydropx/Guía de identidad y estándares marcarios (1).pdf",

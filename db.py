@@ -1,67 +1,22 @@
-"""SQLite database for campaign history, variants, and feedback."""
+"""Supabase database for campaign history, variants, and feedback."""
 
-import json
-import os
-import sqlite3
-from datetime import datetime
+from supabase import create_client
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "skydropx_ads.db")
+from config import SUPABASE_URL, SUPABASE_KEY
 
-
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+_client = None
 
 
-def init_db():
-    """Create tables if they don't exist."""
-    conn = get_connection()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS campaigns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            canal TEXT NOT NULL,
-            formato TEXT NOT NULL,
-            objetivo TEXT NOT NULL,
-            tier INTEGER NOT NULL,
-            pilar TEXT NOT NULL,
-            enfoque_narrativo TEXT DEFAULT 'n/a',
-            brief TEXT DEFAULT '',
-            mensajes_clave TEXT DEFAULT '[]',
-            territorios TEXT DEFAULT '[]',
-            nota TEXT DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            created_by TEXT DEFAULT ''
-        );
-
-        CREATE TABLE IF NOT EXISTS variants (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            campaign_id INTEGER NOT NULL REFERENCES campaigns(id),
-            territorio TEXT DEFAULT '',
-            field_name TEXT NOT NULL,
-            position INTEGER NOT NULL,
-            text_content TEXT NOT NULL,
-            char_count INTEGER NOT NULL,
-            UNIQUE(campaign_id, territorio, field_name, position)
-        );
-
-        CREATE TABLE IF NOT EXISTS feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            variant_id INTEGER NOT NULL REFERENCES variants(id),
-            rating INTEGER NOT NULL CHECK(rating IN (-1, 1)),
-            comment TEXT DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            created_by TEXT DEFAULT ''
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_variants_campaign ON variants(campaign_id);
-        CREATE INDEX IF NOT EXISTS idx_feedback_variant ON feedback(variant_id);
-        CREATE INDEX IF NOT EXISTS idx_feedback_rating ON feedback(rating);
-    """)
-    conn.commit()
-    conn.close()
+def _get_client():
+    global _client
+    if _client is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise RuntimeError(
+                "SUPABASE_URL y SUPABASE_KEY deben estar configurados. "
+                "Agregalos en Streamlit Secrets o como variables de entorno."
+            )
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _client
 
 
 # ---------------------------------------------------------------------------
@@ -70,55 +25,42 @@ def init_db():
 
 def save_campaign(campaign_dict):
     """Save a campaign config. Returns campaign_id."""
-    conn = get_connection()
-    cur = conn.execute("""
-        INSERT INTO campaigns (canal, formato, objetivo, tier, pilar,
-            enfoque_narrativo, brief, mensajes_clave, territorios, nota, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        campaign_dict.get("canal", ""),
-        campaign_dict["formato"],
-        campaign_dict["objetivo"],
-        campaign_dict["tier"],
-        campaign_dict.get("pilar", "caracteristicas"),
-        campaign_dict.get("enfoque_narrativo", "per-territorio"),
-        campaign_dict.get("brief", ""),
-        json.dumps(campaign_dict.get("mensajes_clave", []), ensure_ascii=False),
-        json.dumps(campaign_dict.get("territorios", []), ensure_ascii=False),
-        campaign_dict.get("nota", ""),
-        campaign_dict.get("created_by", ""),
-    ))
-    campaign_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return campaign_id
+    client = _get_client()
+    data = {
+        "canal": campaign_dict.get("canal", ""),
+        "formato": campaign_dict["formato"],
+        "objetivo": campaign_dict["objetivo"],
+        "tier": campaign_dict["tier"],
+        "pilar": campaign_dict.get("pilar", "caracteristicas"),
+        "enfoque_narrativo": campaign_dict.get("enfoque_narrativo", "per-territorio"),
+        "brief": campaign_dict.get("brief", ""),
+        "mensajes_clave": campaign_dict.get("mensajes_clave", []),
+        "territorios": campaign_dict.get("territorios", []),
+        "nota": campaign_dict.get("nota", ""),
+        "created_by": campaign_dict.get("created_by", ""),
+    }
+    result = client.table("campaigns").insert(data).execute()
+    return result.data[0]["id"]
 
 
 def get_campaign(campaign_id):
     """Get a single campaign by ID."""
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
-    conn.close()
-    if row is None:
-        return None
-    return _row_to_campaign(row)
+    client = _get_client()
+    result = client.table("campaigns").select("*").eq("id", campaign_id).execute()
+    return result.data[0] if result.data else None
 
 
 def list_campaigns(limit=50):
     """List recent campaigns."""
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM campaigns ORDER BY created_at DESC LIMIT ?", (limit,)
-    ).fetchall()
-    conn.close()
-    return [_row_to_campaign(r) for r in rows]
-
-
-def _row_to_campaign(row):
-    d = dict(row)
-    d["mensajes_clave"] = json.loads(d["mensajes_clave"])
-    d["territorios"] = json.loads(d["territorios"])
-    return d
+    client = _get_client()
+    result = (
+        client.table("campaigns")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data
 
 
 # ---------------------------------------------------------------------------
@@ -127,72 +69,75 @@ def _row_to_campaign(row):
 
 def save_variants(campaign_id, territorio, ads_dict):
     """Save all generated variants for a campaign/territory.
-    ads_dict = {"post_copy": ["v1", "v2", ...], "encabezado": [...], ...}
-    Returns list of variant IDs.
 
-    Uses INSERT with ON CONFLICT UPDATE to preserve variant IDs
+    Uses upsert with ON CONFLICT to preserve variant IDs
     (and their linked feedback records) when regenerating.
     """
-    conn = get_connection()
+    client = _get_client()
     variant_ids = []
     for field_name, texts in ads_dict.items():
         if not isinstance(texts, list):
             texts = [texts]
         for pos, text in enumerate(texts):
-            cur = conn.execute("""
-                INSERT INTO variants
-                    (campaign_id, territorio, field_name, position, text_content, char_count)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(campaign_id, territorio, field_name, position)
-                DO UPDATE SET text_content = excluded.text_content,
-                              char_count = excluded.char_count
-            """, (campaign_id, territorio, field_name, pos, text, len(text)))
-            variant_ids.append(cur.lastrowid)
-    conn.commit()
-    conn.close()
+            data = {
+                "campaign_id": campaign_id,
+                "territorio": territorio,
+                "field_name": field_name,
+                "position": pos,
+                "text_content": text,
+                "char_count": len(text),
+            }
+            result = (
+                client.table("variants")
+                .upsert(data, on_conflict="campaign_id,territorio,field_name,position")
+                .execute()
+            )
+            variant_ids.append(result.data[0]["id"])
     return variant_ids
 
 
 def get_variants(campaign_id, territorio=""):
-    """Get all variants for a campaign/territory as {field: [texts]}."""
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT * FROM variants
-        WHERE campaign_id = ? AND territorio = ?
-        ORDER BY field_name, position
-    """, (campaign_id, territorio)).fetchall()
-    conn.close()
-
-    result = {}
-    for row in rows:
+    """Get all variants for a campaign/territory as {field: [{id, text, ...}]}."""
+    client = _get_client()
+    result = (
+        client.table("variants")
+        .select("*")
+        .eq("campaign_id", campaign_id)
+        .eq("territorio", territorio)
+        .order("field_name")
+        .order("position")
+        .execute()
+    )
+    grouped = {}
+    for row in result.data:
         field = row["field_name"]
-        if field not in result:
-            result[field] = []
-        result[field].append({
+        if field not in grouped:
+            grouped[field] = []
+        grouped[field].append({
             "id": row["id"],
             "text": row["text_content"],
             "chars": row["char_count"],
             "position": row["position"],
         })
-    return result
+    return grouped
 
 
 def get_variant_by_id(variant_id):
     """Get a single variant."""
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM variants WHERE id = ?", (variant_id,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    client = _get_client()
+    result = client.table("variants").select("*").eq("id", variant_id).execute()
+    return result.data[0] if result.data else None
 
 
 def update_variant_text(variant_id, new_text):
     """Update a variant's text (after regeneration)."""
-    conn = get_connection()
-    conn.execute("""
-        UPDATE variants SET text_content = ?, char_count = ? WHERE id = ?
-    """, (new_text, len(new_text), variant_id))
-    conn.commit()
-    conn.close()
+    client = _get_client()
+    (
+        client.table("variants")
+        .update({"text_content": new_text, "char_count": len(new_text)})
+        .eq("id", variant_id)
+        .execute()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,37 +146,35 @@ def update_variant_text(variant_id, new_text):
 
 def save_feedback(variant_id, rating, comment="", created_by=""):
     """Save feedback for a variant. rating: 1 (like) or -1 (dislike)."""
-    conn = get_connection()
-    conn.execute("""
-        INSERT INTO feedback (variant_id, rating, comment, created_by)
-        VALUES (?, ?, ?, ?)
-    """, (variant_id, rating, comment, created_by))
-    conn.commit()
-    conn.close()
+    client = _get_client()
+    client.table("feedback").insert({
+        "variant_id": variant_id,
+        "rating": rating,
+        "comment": comment,
+        "created_by": created_by,
+    }).execute()
 
 
 def get_feedback_for_variant(variant_id):
     """Get all feedback for a variant."""
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT * FROM feedback WHERE variant_id = ? ORDER BY created_at DESC
-    """, (variant_id,)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    client = _get_client()
+    result = (
+        client.table("feedback")
+        .select("*")
+        .eq("variant_id", variant_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data
 
 
 def get_feedback_for_campaign(campaign_id):
-    """Get all feedback for a campaign's variants."""
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT f.*, v.field_name, v.position, v.text_content, v.territorio
-        FROM feedback f
-        JOIN variants v ON f.variant_id = v.id
-        WHERE v.campaign_id = ?
-        ORDER BY f.created_at DESC
-    """, (campaign_id,)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    """Get all feedback for a campaign's variants (via RPC join)."""
+    client = _get_client()
+    result = client.rpc(
+        "get_campaign_feedback", {"p_campaign_id": campaign_id}
+    ).execute()
+    return result.data
 
 
 # ---------------------------------------------------------------------------
@@ -239,58 +182,43 @@ def get_feedback_for_campaign(campaign_id):
 # ---------------------------------------------------------------------------
 
 def get_approved_variants(formato, field_name, limit=20):
-    """Get variants that received positive feedback for a specific format/field.
-    Returns the most recent approved variants.
-    """
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT DISTINCT v.text_content, v.char_count, c.formato, c.tier, c.objetivo
-        FROM variants v
-        JOIN feedback f ON f.variant_id = v.id
-        JOIN campaigns c ON c.id = v.campaign_id
-        WHERE f.rating = 1
-          AND c.formato = ?
-          AND v.field_name = ?
-        ORDER BY f.created_at DESC
-        LIMIT ?
-    """, (formato, field_name, limit)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    """Get approved variants via RPC (joins feedback + variants + campaigns)."""
+    client = _get_client()
+    result = client.rpc("get_approved_variants", {
+        "p_formato": formato,
+        "p_field_name": field_name,
+        "p_limit": limit,
+    }).execute()
+    return result.data
 
 
 def get_rejected_patterns(formato, field_name, limit=10):
-    """Get variants with negative feedback + comments (rejection reasons).
-    These become 'avoid this' instructions.
-    """
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT v.text_content, f.comment, v.char_count
-        FROM variants v
-        JOIN feedback f ON f.variant_id = v.id
-        JOIN campaigns c ON c.id = v.campaign_id
-        WHERE f.rating = -1
-          AND f.comment != ''
-          AND c.formato = ?
-          AND v.field_name = ?
-        ORDER BY f.created_at DESC
-        LIMIT ?
-    """, (formato, field_name, limit)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    """Get rejected patterns via RPC (variants with negative feedback + comments)."""
+    client = _get_client()
+    result = client.rpc("get_rejected_patterns", {
+        "p_formato": formato,
+        "p_field_name": field_name,
+        "p_limit": limit,
+    }).execute()
+    return result.data
 
 
 def get_feedback_stats():
     """Get overall feedback statistics."""
-    conn = get_connection()
-    stats = {}
-    stats["total_campaigns"] = conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
-    stats["total_variants"] = conn.execute("SELECT COUNT(*) FROM variants").fetchone()[0]
-    stats["total_feedback"] = conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
-    stats["total_approved"] = conn.execute("SELECT COUNT(*) FROM feedback WHERE rating = 1").fetchone()[0]
-    stats["total_rejected"] = conn.execute("SELECT COUNT(*) FROM feedback WHERE rating = -1").fetchone()[0]
-    conn.close()
-    return stats
-
-
-# Initialize on import
-init_db()
+    client = _get_client()
+    campaigns = client.table("campaigns").select("id", count="exact").execute()
+    variants_r = client.table("variants").select("id", count="exact").execute()
+    all_fb = client.table("feedback").select("id", count="exact").execute()
+    approved = (
+        client.table("feedback").select("id", count="exact").eq("rating", 1).execute()
+    )
+    rejected = (
+        client.table("feedback").select("id", count="exact").eq("rating", -1).execute()
+    )
+    return {
+        "total_campaigns": campaigns.count or 0,
+        "total_variants": variants_r.count or 0,
+        "total_feedback": all_fb.count or 0,
+        "total_approved": approved.count or 0,
+        "total_rejected": rejected.count or 0,
+    }
