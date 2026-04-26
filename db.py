@@ -81,7 +81,7 @@ def save_campaign(campaign_dict):
         campaign_dict["objetivo"],
         campaign_dict["tier"],
         campaign_dict.get("pilar", "caracteristicas"),
-        campaign_dict.get("enfoque_narrativo", "n/a"),
+        campaign_dict.get("enfoque_narrativo", "per-territorio"),
         campaign_dict.get("brief", ""),
         json.dumps(campaign_dict.get("mensajes_clave", []), ensure_ascii=False),
         json.dumps(campaign_dict.get("territorios", []), ensure_ascii=False),

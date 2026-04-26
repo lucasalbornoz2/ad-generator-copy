@@ -793,6 +793,12 @@ def _write_metadata(ws, campaign, territorio, styles):
     ]
     if territorio:
         meta.append(("Territorio", territorio))
+        # Show per-territory enfoque if available
+        terrs = campaign.get("territorios", [])
+        for t in terrs:
+            if isinstance(t, dict) and t.get("nombre") == territorio:
+                meta.append(("Enfoque territorio", t.get("enfoque", "n/a").capitalize()))
+                break
     if campaign.get("nota"):
         meta.append(("Nota", campaign["nota"][:80]))
 

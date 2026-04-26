@@ -121,58 +121,88 @@ def _regenerate_variant(campaign, territorio, v_idx, current_texts, comment, fie
         st.error(f"Error regenerando: {e}")
 
 
-def _feedback_controls(db_variants, field_order, v_idx, campaign_id, territorio, formato):
-    """Feedback buttons and comment for a Meta variant."""
-    st.markdown("---")
-    col1, col2, col3 = st.columns([0.15, 0.15, 0.7])
+def _regenerate_single_field(campaign, territorio, v_idx, field_name, field_label, current_text, comment):
+    """Regenerate a single field of a single variant."""
+    formato = campaign["formato"]
+    campaign_id = st.session_state.campaign_id
+    specs = AD_SPECS.get(formato, {})
+    max_chars = specs.get(field_name, {}).get("max_chars", 300)
 
-    main_field = field_order[0][0]
-    variant_data = db_variants.get(main_field, [])
+    prompt = build_generation_prompt(campaign, territorio)
+    regen_addition = build_regen_prompt_addition(current_text, comment)
+    prompt += f"\n\n{regen_addition}"
+    prompt += (
+        f"\nREGENERA SOLO el campo '{field_name}' de la VARIANTE {v_idx + 1}."
+        f"\nDevuelve el JSON completo pero MEJORA UNICAMENTE '{field_name}' posicion {v_idx}."
+        f"\nMax {max_chars} caracteres para este campo."
+    )
+
+    try:
+        raw_ads = generate_with_gemini(prompt, formato)
+        new_ads = normalize_ads(raw_ads, formato)
+
+        terr_key = territorio or formato
+        current_ads = st.session_state.ads[terr_key][0]
+        new_texts = new_ads.get(field_name, [])
+        if v_idx < len(new_texts) and field_name in current_ads:
+            current_ads[field_name][v_idx] = new_texts[v_idx]
+
+        new_validation = validate_ad_set(formato, current_ads)
+        st.session_state.ads[terr_key] = (current_ads, new_validation)
+
+        db_variants = get_variants(campaign_id, territorio)
+        vdata = db_variants.get(field_name, [])
+        if v_idx < len(vdata):
+            update_variant_text(vdata[v_idx]["id"], current_ads[field_name][v_idx])
+
+        st.success(f"V{v_idx + 1} — {field_label} regenerado.")
+        st.rerun()
+
+    except Exception as e:
+        st.error(f"Error regenerando {field_label}: {e}")
+
+
+def _field_feedback_controls(db_variants, field_name, field_label, v_idx, territorio, formato):
+    """Feedback buttons for a single field within a variant."""
+    variant_data = db_variants.get(field_name, [])
     vid = variant_data[v_idx]["id"] if v_idx < len(variant_data) else None
+    if not vid:
+        return
 
-    if vid:
-        with col1:
-            if st.button("👍 Aprobar", key=f"like_v{v_idx}_{territorio}"):
-                for field_name, _, _ in field_order:
-                    vdata = db_variants.get(field_name, [])
-                    if v_idx < len(vdata):
-                        save_feedback(vdata[v_idx]["id"], 1)
-                st.toast(f"V{v_idx + 1} aprobada")
-                st.rerun()
-
-        with col2:
-            if st.button("👎 Rechazar", key=f"dislike_v{v_idx}_{territorio}"):
-                comment = st.session_state.get(f"comment_v{v_idx}_{territorio}", "")
-                for field_name, _, _ in field_order:
-                    vdata = db_variants.get(field_name, [])
-                    if v_idx < len(vdata):
-                        save_feedback(vdata[v_idx]["id"], -1, comment)
-                st.toast(f"V{v_idx + 1} rechazada")
-                st.rerun()
-
+    key_suffix = f"{territorio}_{field_name}_{v_idx}"
+    col1, col2, col3, col4 = st.columns([0.08, 0.08, 0.08, 0.76])
+    with col1:
+        if st.button("👍", key=f"like_{key_suffix}", help=f"Aprobar {field_label}"):
+            save_feedback(vid, 1)
+            st.toast(f"V{v_idx + 1} {field_label} aprobado")
+            st.rerun()
+    with col2:
+        if st.button("👎", key=f"dislike_{key_suffix}", help=f"Rechazar {field_label}"):
+            comment = st.session_state.get(f"comment_{key_suffix}", "")
+            save_feedback(vid, -1, comment)
+            st.toast(f"V{v_idx + 1} {field_label} rechazado")
+            st.rerun()
     with col3:
+        if st.button("🔄", key=f"regen_{key_suffix}", help=f"Regenerar {field_label}"):
+            comment = st.session_state.get(f"comment_{key_suffix}", "")
+            campaign = st.session_state.campaign
+            texts = st.session_state.ads[territorio or formato][0].get(field_name, [])
+            current_text = texts[v_idx] if v_idx < len(texts) else ""
+            with st.spinner(f"Regenerando {field_label}..."):
+                _regenerate_single_field(
+                    campaign, territorio, v_idx, field_name, field_label, current_text, comment,
+                )
+    with col4:
         st.text_input(
             "Comentario",
-            key=f"comment_v{v_idx}_{territorio}",
-            placeholder="Feedback: 'el CTA no pega', 'muy generico'...",
+            key=f"comment_{key_suffix}",
+            placeholder=f"Feedback para {field_label}...",
             label_visibility="collapsed",
         )
 
-    if vid:
-        if st.button(f"🔄 Regenerar V{v_idx + 1}", key=f"regen_v{v_idx}_{territorio}"):
-            comment = st.session_state.get(f"comment_v{v_idx}_{territorio}", "")
-            campaign = st.session_state.campaign
-            current_texts = {}
-            for field_name, _, _ in field_order:
-                texts = st.session_state.ads[territorio or formato][0].get(field_name, [])
-                if v_idx < len(texts):
-                    current_texts[field_name] = texts[v_idx]
-            with st.spinner(f"Regenerando V{v_idx + 1}..."):
-                _regenerate_variant(campaign, territorio, v_idx, current_texts, comment, field_order)
-
 
 def _display_meta_variants(ads, formato, campaign_id, territorio):
-    """Display Meta ad variants with feedback controls."""
+    """Display Meta ad variants with per-field feedback controls."""
     db_variants = get_variants(campaign_id, territorio)
     field_order = _meta_field_order(formato)
 
@@ -196,14 +226,15 @@ def _display_meta_variants(ads, formato, campaign_id, territorio):
                         label=field_label,
                         value=text,
                         height=150 if field_name == "guion_video" else 120,
-                        key=f"{territorio}_{field_name}_{v_idx}",
+                        key=f"txt_{territorio}_{field_name}_{v_idx}",
                         label_visibility="collapsed",
                         disabled=True,
                     )
                 else:
                     st.code(text)
 
-            _feedback_controls(db_variants, field_order, v_idx, campaign_id, territorio, formato)
+                # Feedback per field
+                _field_feedback_controls(db_variants, field_name, field_label, v_idx, territorio, formato)
 
 
 def _display_google_ads_variants(ads, formato, campaign_id, territorio):
@@ -270,7 +301,6 @@ def _show_history_page():
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown(f"**Pilar:** {c['pilar']}")
-                st.markdown(f"**Enfoque:** {c['enfoque_narrativo']}")
                 if c.get("brief"):
                     st.markdown(f"**Brief:** {c['brief'][:150]}...")
             with col2:
@@ -279,7 +309,12 @@ def _show_history_page():
                     for msg in c["mensajes_clave"]:
                         st.markdown(f"- {msg}")
                 if c.get("territorios"):
-                    st.markdown(f"**Territorios:** {', '.join(c['territorios'])}")
+                    st.markdown("**Territorios:**")
+                    for t in c["territorios"]:
+                        if isinstance(t, dict):
+                            st.markdown(f"- {t['nombre']} → _{t.get('enfoque', 'n/a')}_")
+                        else:
+                            st.markdown(f"- {t}")
 
             feedback = get_feedback_for_campaign(c["id"])
             if feedback:
@@ -424,32 +459,67 @@ with st.sidebar:
         )
         mensajes_clave = [m.strip() for m in mensajes_raw.split("\n") if m.strip()]
 
-        territorios_raw = st.text_input(
-            "7. Territorios creativos (separados por coma)",
-            placeholder="Decidir todo el tiempo, Crecer es emocionante",
-        )
-        territorios = [t.strip() for t in territorios_raw.split(",") if t.strip()]
+        # --- Territorios creativos con enfoque individual ---
+        st.markdown("**7. Territorios creativos**")
 
-        enfoque = st.selectbox(
-            "8. Enfoque narrativo",
-            options=["plataforma", "personaje", "plataforma+personaje", "n/a"],
-            index=3,
-            format_func=lambda x: {
-                "plataforma": "Plataforma (funcionalidades)",
-                "personaje": "Personaje (perspectiva usuario)",
-                "plataforma+personaje": "Plataforma + Personaje",
-                "n/a": "Sin enfoque especifico",
-            }.get(x, x),
-        )
+        if "territorios_list" not in st.session_state:
+            st.session_state.territorios_list = []
+
+        _enfoque_labels = {
+            "plataforma": "Plataforma",
+            "personaje": "Personaje",
+            "plataforma+personaje": "Plataforma + Personaje",
+            "n/a": "Sin enfoque",
+        }
+        _enfoque_options = list(_enfoque_labels.keys())
+
+        # Show existing territories
+        to_remove = None
+        for idx, terr in enumerate(st.session_state.territorios_list):
+            col_name, col_enf, col_del = st.columns([0.45, 0.4, 0.15])
+            with col_name:
+                st.text(terr["nombre"])
+            with col_enf:
+                st.text(_enfoque_labels.get(terr["enfoque"], terr["enfoque"]))
+            with col_del:
+                if st.button("✕", key=f"del_terr_{idx}"):
+                    to_remove = idx
+
+        if to_remove is not None:
+            st.session_state.territorios_list.pop(to_remove)
+            st.rerun()
+
+        # Add new territory
+        with st.expander("Agregar territorio", expanded=len(st.session_state.territorios_list) == 0):
+            new_terr_name = st.text_input(
+                "Nombre del territorio",
+                key="new_terr_name",
+                placeholder="Ej: El ruido del Hot Sale",
+            )
+            new_terr_enfoque = st.selectbox(
+                "Enfoque narrativo",
+                options=_enfoque_options,
+                key="new_terr_enfoque",
+                format_func=lambda x: _enfoque_labels.get(x, x),
+            )
+            if st.button("+ Agregar", key="add_terr_btn"):
+                if new_terr_name.strip():
+                    st.session_state.territorios_list.append({
+                        "nombre": new_terr_name.strip(),
+                        "enfoque": new_terr_enfoque,
+                    })
+                    st.rerun()
+
+        territorios = st.session_state.territorios_list
 
         pilar = st.selectbox(
-            "9. Pilar de comunicacion",
+            "8. Pilar de comunicacion",
             options=["caracteristicas", "beneficios", "marca"],
             format_func=lambda x: x.capitalize(),
         )
 
         nota = st.text_input(
-            "10. Nota adicional",
+            "9. Nota adicional",
             placeholder="Evitar cliches del Dia de las Madres",
         )
 
@@ -479,7 +549,6 @@ if page == "Generar":
             "brief": brief,
             "mensajes_clave": mensajes_clave,
             "territorios": territorios,
-            "enfoque_narrativo": enfoque,
             "nota": nota,
         }
 
@@ -490,18 +559,24 @@ if page == "Generar":
         campaign_id = save_campaign(campaign)
         st.session_state.campaign_id = campaign_id
 
-        terrs = territorios if territorios else [""]
+        terrs = territorios if territorios else [{"nombre": "", "enfoque": "n/a"}]
         all_results = {}
 
-        for territorio in terrs:
-            label = territorio if territorio else formato
+        for terr_item in terrs:
+            terr_nombre = terr_item["nombre"] if isinstance(terr_item, dict) else terr_item
+            terr_enfoque = terr_item.get("enfoque", "n/a") if isinstance(terr_item, dict) else "n/a"
+            label = terr_nombre if terr_nombre else formato
+
+            # Inject per-territory enfoque into campaign for prompt building
+            campaign_with_enfoque = {**campaign, "enfoque_narrativo": terr_enfoque}
+
             with st.spinner(f"Generando: {label}..."):
                 best_ads = None
                 best_validation = None
 
                 for attempt in range(3):
                     try:
-                        prompt = build_generation_prompt(campaign, territorio)
+                        prompt = build_generation_prompt(campaign_with_enfoque, terr_nombre)
                         raw_ads = generate_with_gemini(prompt, formato)
                         ads = normalize_ads(raw_ads, formato)
                         validation = validate_ad_set(formato, ads)
@@ -521,9 +596,9 @@ if page == "Generar":
                         st.warning(f"Intento {attempt + 1}: {e}")
 
                 if best_ads:
-                    key = territorio or formato
+                    key = terr_nombre or formato
                     all_results[key] = (best_ads, best_validation)
-                    save_variants(campaign_id, territorio, best_ads)
+                    save_variants(campaign_id, terr_nombre, best_ads)
 
         if all_results:
             st.session_state.ads = all_results
