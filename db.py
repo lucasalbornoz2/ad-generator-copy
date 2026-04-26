@@ -129,6 +129,9 @@ def save_variants(campaign_id, territorio, ads_dict):
     """Save all generated variants for a campaign/territory.
     ads_dict = {"post_copy": ["v1", "v2", ...], "encabezado": [...], ...}
     Returns list of variant IDs.
+
+    Uses INSERT with ON CONFLICT UPDATE to preserve variant IDs
+    (and their linked feedback records) when regenerating.
     """
     conn = get_connection()
     variant_ids = []
@@ -137,9 +140,12 @@ def save_variants(campaign_id, territorio, ads_dict):
             texts = [texts]
         for pos, text in enumerate(texts):
             cur = conn.execute("""
-                INSERT OR REPLACE INTO variants
+                INSERT INTO variants
                     (campaign_id, territorio, field_name, position, text_content, char_count)
                 VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(campaign_id, territorio, field_name, position)
+                DO UPDATE SET text_content = excluded.text_content,
+                              char_count = excluded.char_count
             """, (campaign_id, territorio, field_name, pos, text, len(text)))
             variant_ids.append(cur.lastrowid)
     conn.commit()

@@ -38,10 +38,19 @@ from learning import get_learning_prompt_section
 
 
 def configure_gemini():
+    """Configure Gemini API. Returns False if key is missing (for Streamlit)."""
     if not GEMINI_API_KEY:
-        print("Error: GEMINI_API_KEY no configurada.")
-        print("Ejecuta: export GEMINI_API_KEY='tu-api-key'")
-        sys.exit(1)
+        try:
+            import streamlit as _st
+            _st.error(
+                "GEMINI_API_KEY no configurada. "
+                "Agrega `GEMINI_API_KEY = \"tu-key\"` en Settings > Secrets."
+            )
+            _st.stop()
+        except ImportError:
+            print("Error: GEMINI_API_KEY no configurada.")
+            print("Ejecuta: export GEMINI_API_KEY='tu-api-key'")
+            sys.exit(1)
     genai.configure(api_key=GEMINI_API_KEY)
 
 
@@ -334,7 +343,12 @@ def _print_campaign_summary(campaign):
         for i, msg in enumerate(campaign["mensajes_clave"], 1):
             print(f"              {i}. {msg[:70]}{'...' if len(msg) > 70 else ''}")
     if campaign.get("territorios"):
-        print(f"  Territorios: {', '.join(campaign['territorios'])}")
+        terrs = campaign["territorios"]
+        if terrs and isinstance(terrs[0], dict):
+            labels = [f"{t['nombre']} ({t.get('enfoque', 'n/a')})" for t in terrs]
+            print(f"  Territorios: {', '.join(labels)}")
+        else:
+            print(f"  Territorios: {', '.join(terrs)}")
     if campaign.get("nota"):
         print(f"  Nota:       {campaign['nota'][:60]}")
     if is_meta_format(campaign["formato"]):

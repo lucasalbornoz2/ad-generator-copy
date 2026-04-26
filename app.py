@@ -53,72 +53,27 @@ configure_gemini()
 # Helper functions (defined BEFORE main flow)
 # =========================================================================
 
+_FIELD_LABELS = {
+    "post_copy": "Post Copy",
+    "copy_imagen": "Copy de la Imagen",
+    "encabezado": "Encabezado",
+    "descripcion": "Descripcion",
+    "guion_video": "Guion de Video",
+    "card_1_copy": "Card 1",
+    "card_2_copy": "Card 2",
+    "card_3_copy": "Card 3",
+}
+
+
 def _meta_field_order(formato):
-    """Return (field_name, label, max_chars) tuples for Meta formats."""
-    if formato == "meta_imagen":
-        return [
-            ("post_copy", "Post Copy", 450),
-            ("copy_imagen", "Copy de la Imagen", 280),
-            ("encabezado", "Encabezado", 25),
-            ("descripcion", "Descripcion", 30),
-        ]
-    elif formato == "meta_video":
-        return [
-            ("post_copy", "Post Copy", 450),
-            ("guion_video", "Guion de Video", 1600),
-            ("encabezado", "Encabezado", 25),
-            ("descripcion", "Descripcion", 30),
-        ]
-    elif formato == "meta_carousel":
-        return [
-            ("post_copy", "Post Copy", 450),
-            ("card_1_copy", "Card 1", 280),
-            ("card_2_copy", "Card 2", 280),
-            ("card_3_copy", "Card 3", 280),
-            ("encabezado", "Encabezado", 25),
-            ("descripcion", "Descripcion", 30),
-        ]
-    return []
-
-
-def _regenerate_variant(campaign, territorio, v_idx, current_texts, comment, field_order):
-    """Regenerate a single variant using feedback."""
-    formato = campaign["formato"]
-    campaign_id = st.session_state.campaign_id
-
-    prompt = build_generation_prompt(campaign, territorio)
-    main_text = current_texts.get(field_order[0][0], "")
-    regen_addition = build_regen_prompt_addition(main_text, comment)
-    prompt = prompt + "\n\n" + regen_addition
-    prompt += f"\nREGENERA SOLO LA VARIANTE {v_idx + 1} (posicion {v_idx} en cada array del JSON)."
-    prompt += "\nManten las otras 5 variantes pero MEJORA esta especifica."
-
-    try:
-        raw_ads = generate_with_gemini(prompt, formato)
-        new_ads = normalize_ads(raw_ads, formato)
-
-        terr_key = territorio or formato
-        current_ads = st.session_state.ads[terr_key][0]
-        for field_name, _, _ in field_order:
-            new_texts = new_ads.get(field_name, [])
-            if v_idx < len(new_texts) and field_name in current_ads:
-                current_ads[field_name][v_idx] = new_texts[v_idx]
-
-        new_validation = validate_ad_set(formato, current_ads)
-        st.session_state.ads[terr_key] = (current_ads, new_validation)
-
-        db_variants = get_variants(campaign_id, territorio)
-        for field_name, _, _ in field_order:
-            vdata = db_variants.get(field_name, [])
-            if v_idx < len(vdata):
-                new_text = current_ads[field_name][v_idx]
-                update_variant_text(vdata[v_idx]["id"], new_text)
-
-        st.success(f"V{v_idx + 1} regenerada con feedback.")
-        st.rerun()
-
-    except Exception as e:
-        st.error(f"Error regenerando: {e}")
+    """Return (field_name, label, max_chars) tuples for Meta formats.
+    Reads max_chars from AD_SPECS to avoid duplication.
+    """
+    specs = AD_SPECS.get(formato, {})
+    return [
+        (field_name, _FIELD_LABELS.get(field_name, field_name), spec["max_chars"])
+        for field_name, spec in specs.items()
+    ]
 
 
 def _regenerate_single_field(campaign, territorio, v_idx, field_name, field_label, current_text, comment):
@@ -238,7 +193,7 @@ def _display_meta_variants(ads, formato, campaign_id, territorio):
 
 
 def _display_google_ads_variants(ads, formato, campaign_id, territorio):
-    """Display Google Ads results with feedback controls."""
+    """Display Google Ads results with per-item feedback controls."""
     db_variants = get_variants(campaign_id, territorio)
     specs = AD_SPECS.get(formato, {})
 
@@ -253,33 +208,12 @@ def _display_google_ads_variants(ads, formato, campaign_id, territorio):
             is_ok = char_count <= max_chars
             color = "green" if is_ok else "red"
 
-            col1, col2, col3 = st.columns([0.7, 0.15, 0.15])
-            with col1:
-                st.markdown(
-                    f"`{i+1}.` {text} "
-                    f"<span style='color:{color}'>({char_count}/{max_chars})</span>",
-                    unsafe_allow_html=True,
-                )
-
-            variant_data = db_variants.get(field_name, [])
-            if i < len(variant_data):
-                vid = variant_data[i]["id"]
-                with col2:
-                    if st.button("👍", key=f"like_{territorio}_{field_name}_{i}"):
-                        save_feedback(vid, 1)
-                        st.toast(f"Aprobado: {label} #{i+1}")
-                with col3:
-                    if st.button("👎", key=f"dislike_{territorio}_{field_name}_{i}"):
-                        comment = st.session_state.get(f"comment_{territorio}_{field_name}_{i}", "")
-                        save_feedback(vid, -1, comment)
-                        st.toast(f"Rechazado: {label} #{i+1}")
-
-            st.text_input(
-                "Comentario",
-                key=f"comment_{territorio}_{field_name}_{i}",
-                placeholder="Feedback opcional...",
-                label_visibility="collapsed",
+            st.markdown(
+                f"`{i+1}.` {text} "
+                f"<span style='color:{color}'>({char_count}/{max_chars})</span>",
+                unsafe_allow_html=True,
             )
+            _field_feedback_controls(db_variants, field_name, label, i, territorio, formato)
 
 
 def _show_history_page():
