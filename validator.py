@@ -1,5 +1,6 @@
 """Validates generated ad copies against brand rules and character limits."""
 
+import re
 from difflib import SequenceMatcher
 from config import AD_SPECS
 
@@ -34,7 +35,7 @@ def validate_tone(text: str) -> list[str]:
     warnings = []
     lower = text.lower()
     for word in FORBIDDEN_TONE_WORDS:
-        if word in lower:
+        if re.search(rf'\b{re.escape(word)}\b', lower):
             warnings.append(f"Tono prohibido detectado: '{word}' en '{text[:50]}...'")
     return warnings
 

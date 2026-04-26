@@ -1,24 +1,20 @@
 import os
 
-try:
-    import streamlit as _st
-    _secrets = _st.secrets
-except Exception:
-    _secrets = {}
+def _get_secret(key, default=""):
+    """Read a secret from Streamlit secrets or environment variables."""
+    try:
+        import streamlit as _st
+        val = _st.secrets.get(key)
+        if val:
+            return val
+    except Exception:
+        pass
+    return os.environ.get(key, default)
 
-GEMINI_API_KEY = (
-    _secrets.get("GEMINI_API_KEY")
-    or os.environ.get("GEMINI_API_KEY", "")
-)
 
-SUPABASE_URL = (
-    _secrets.get("SUPABASE_URL")
-    or os.environ.get("SUPABASE_URL", "")
-)
-SUPABASE_KEY = (
-    _secrets.get("SUPABASE_KEY")
-    or os.environ.get("SUPABASE_KEY", "")
-)
+GEMINI_API_KEY = _get_secret("GEMINI_API_KEY")
+SUPABASE_URL = _get_secret("SUPABASE_URL")
+SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 
 BRAND_BOOK_PDF = os.environ.get(
     "BRAND_BOOK_PDF",

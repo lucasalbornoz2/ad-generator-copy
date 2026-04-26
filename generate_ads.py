@@ -14,6 +14,7 @@ from datetime import datetime
 import google.generativeai as genai
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
 
 from brand_parser import build_style_guide_prompt, STYLE_GUIDE, PILAR_CONTENT
 from config import (
@@ -236,36 +237,52 @@ def run_interactive_wizard():
         mensajes_clave.append(msg)
         idx += 1
 
-    # --- Step 7: Territorios ---
+    # --- Step 7: Territorios con enfoque individual ---
     print()
     print("─" * 60)
     print("  PASO 7/10: TERRITORIOS CREATIVOS")
     print("─" * 60)
     print("  Son los angulos o ejes creativos de la campana.")
     print("  Si defines varios, se genera un SET COMPLETO de copys por cada uno.")
-    print("  Ejemplo: 'Decidir todo el tiempo, Crecer es emocionante'")
-    territorios = _ask_list(
-        "Ingresa los territorios creativos (separados por coma):",
-    )
+    print("  Cada territorio puede tener su propio enfoque narrativo.")
+    print("  Ejemplo: 'Decidir todo el tiempo' con enfoque Personaje")
 
-    # --- Step 8: Enfoque narrativo ---
+    _enfoque_options_cli = [
+        {"value": "plataforma", "label": "Plataforma          - Funcionalidades concretas de la herramienta"},
+        {"value": "personaje", "label": "Personaje           - Perspectiva emocional del usuario"},
+        {"value": "plataforma+personaje", "label": "Plataforma+Personaje - Combina funcionalidad con emocion"},
+        {"value": "n/a", "label": "N/A                 - Sin enfoque especifico"},
+    ]
+
+    territorios = []
+    print("\n  Ingresa los territorios uno por uno (Enter vacio para terminar):")
+    t_idx = 1
+    while True:
+        t_name = input(f"  Territorio {t_idx}: ").strip()
+        if not t_name:
+            break
+        print(f"  Enfoque narrativo para '{t_name}':")
+        t_enfoque = _ask_choice(
+            "Que enfoque narrativo?",
+            _enfoque_options_cli,
+            default="n/a",
+        )
+        territorios.append({"nombre": t_name, "enfoque": t_enfoque})
+        t_idx += 1
+
+    # --- Step 8: Enfoque narrativo por defecto ---
     print()
     print("─" * 60)
-    print("  PASO 8/10: ENFOQUE NARRATIVO")
+    print("  PASO 8/10: ENFOQUE NARRATIVO (por defecto)")
     print("─" * 60)
-    print("  Define desde donde se cuenta la historia:")
+    print("  Se usa cuando no hay territorios o como fallback.")
     print("  - Plataforma: muestra la herramienta ('cotiza', 'rastrea', 'integra')")
     print("  - Personaje: habla desde el usuario ('Tu negocio merece...')")
     print("  - Plataforma+Personaje: combina ambos enfoques")
     print("  - N/A: sin enfoque especifico")
     enfoque = _ask_choice(
-        "Que enfoque narrativo usar?",
-        [
-            {"value": "plataforma", "label": "Plataforma          - Funcionalidades concretas de la herramienta"},
-            {"value": "personaje", "label": "Personaje           - Perspectiva emocional del usuario"},
-            {"value": "plataforma+personaje", "label": "Plataforma+Personaje - Combina funcionalidad con emocion"},
-            {"value": "n/a", "label": "N/A                 - Sin enfoque especifico"},
-        ],
+        "Que enfoque narrativo por defecto?",
+        _enfoque_options_cli,
         default="n/a",
     )
 
@@ -803,16 +820,17 @@ def _write_metadata(ws, campaign, territorio, styles):
         ("Formato", formato.upper().replace("_", " ")),
         ("Objetivo", campaign["objetivo"].capitalize()),
         ("Tier", f"{campaign['tier']} - {STYLE_GUIDE['tiers'][campaign['tier']]['name']}"),
-        ("Enfoque", campaign.get("enfoque_narrativo", "n/a").capitalize()),
     ]
+    # Resolve enfoque: per-territory if available, else campaign-level
+    enfoque_display = campaign.get("enfoque_narrativo", "n/a")
     if territorio:
         meta.append(("Territorio", territorio))
-        # Show per-territory enfoque if available
         terrs = campaign.get("territorios", [])
         for t in terrs:
             if isinstance(t, dict) and t.get("nombre") == territorio:
-                meta.append(("Enfoque territorio", t.get("enfoque", "n/a").capitalize()))
+                enfoque_display = t.get("enfoque", enfoque_display)
                 break
+    meta.append(("Enfoque", enfoque_display.capitalize()))
     if campaign.get("nota"):
         meta.append(("Nota", campaign["nota"][:80]))
 
@@ -994,41 +1012,50 @@ def _export_meta_excel(results, campaign):
 
         # Column widths
         ws.column_dimensions["A"].width = 14
-        col_letter = "B"
-        for fc in field_config:
-            ws.column_dimensions[col_letter].width = fc.get("width", 40)
-            col_letter = chr(ord(col_letter) + 1)
-        ws.column_dimensions[col_letter].width = 10
+        for col_idx, fc in enumerate(field_config, 2):
+            ws.column_dimensions[get_column_letter(col_idx)].width = fc.get("width", 40)
+        ws.column_dimensions[get_column_letter(len(field_config) + 2)].width = 10
 
     return _save_workbook(wb, campaign, results)
 
 
+_FIELD_WIDTHS = {
+    "post_copy": 60,
+    "copy_imagen": 45,
+    "guion_video": 70,
+    "card_1_copy": 40,
+    "card_2_copy": 40,
+    "card_3_copy": 40,
+    "encabezado": 25,
+    "descripcion": 28,
+}
+
+_FIELD_LABELS_EXCEL = {
+    "post_copy": "Post Copy",
+    "copy_imagen": "Copy de la Imagen",
+    "guion_video": "Guión de Video",
+    "card_1_copy": "Card 1",
+    "card_2_copy": "Card 2",
+    "card_3_copy": "Card 3",
+    "encabezado": "Encabezado",
+    "descripcion": "Descripción",
+}
+
+
 def _get_meta_field_config(formato):
-    """Return field display configuration for Meta formats."""
-    if formato == "meta_imagen":
-        return [
-            {"field": "post_copy", "label": "Post Copy", "max_chars": 450, "width": 60},
-            {"field": "copy_imagen", "label": "Copy de la Imagen", "max_chars": 280, "width": 45},
-            {"field": "encabezado", "label": "Encabezado", "max_chars": 25, "width": 25},
-            {"field": "descripcion", "label": "Descripción", "max_chars": 30, "width": 28},
-        ]
-    elif formato == "meta_video":
-        return [
-            {"field": "post_copy", "label": "Post Copy", "max_chars": 450, "width": 60},
-            {"field": "guion_video", "label": "Guión de Video", "max_chars": 1600, "width": 70},
-            {"field": "encabezado", "label": "Encabezado", "max_chars": 25, "width": 25},
-            {"field": "descripcion", "label": "Descripción", "max_chars": 30, "width": 28},
-        ]
-    elif formato == "meta_carousel":
-        return [
-            {"field": "post_copy", "label": "Post Copy", "max_chars": 450, "width": 60},
-            {"field": "card_1_copy", "label": "Card 1", "max_chars": 280, "width": 40},
-            {"field": "card_2_copy", "label": "Card 2", "max_chars": 280, "width": 40},
-            {"field": "card_3_copy", "label": "Card 3", "max_chars": 280, "width": 40},
-            {"field": "encabezado", "label": "Encabezado", "max_chars": 25, "width": 25},
-            {"field": "descripcion", "label": "Descripción", "max_chars": 30, "width": 28},
-        ]
-    return []
+    """Return field display configuration for Meta formats.
+    Reads max_chars from AD_SPECS to avoid duplication.
+    """
+    specs = AD_SPECS.get(formato, {})
+    return [
+        {
+            "field": field_name,
+            "label": _FIELD_LABELS_EXCEL.get(field_name, field_name.replace("_", " ").title()),
+            "max_chars": spec["max_chars"],
+            "width": _FIELD_WIDTHS.get(field_name, 40),
+        }
+        for field_name, spec in specs.items()
+    ]
 
 
 def _save_workbook(wb, campaign, results):
@@ -1082,17 +1109,25 @@ def main():
     # Generate per territory (or once if no territories)
     territorios = campaign.get("territorios", [])
     if not territorios:
-        territorios = [""]
+        territorios = [{"nombre": "", "enfoque": campaign.get("enfoque_narrativo", "n/a")}]
 
     results = {}
-    for territorio in territorios:
-        label = territorio if territorio else campaign["formato"]
+    for terr_item in territorios:
+        if isinstance(terr_item, dict):
+            terr_nombre = terr_item["nombre"]
+            terr_enfoque = terr_item.get("enfoque", "n/a")
+        else:
+            terr_nombre = terr_item
+            terr_enfoque = campaign.get("enfoque_narrativo", "n/a")
+
+        label = terr_nombre if terr_nombre else campaign["formato"]
         print(f"\n{'─' * 50}")
         print(f"  Generando: {label}")
         print(f"{'─' * 50}")
 
-        ads, validation = generate_for_territory(campaign, territorio)
-        results[territorio or campaign["formato"]] = (ads, validation)
+        campaign_with_enfoque = {**campaign, "enfoque_narrativo": terr_enfoque}
+        ads, validation = generate_for_territory(campaign_with_enfoque, terr_nombre)
+        results[terr_nombre or campaign["formato"]] = (ads, validation)
 
     # Check if we got any results
     valid_results = {k: v for k, v in results.items() if v[0] is not None}
