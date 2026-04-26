@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.db
+.env
+output/
+.streamlit/secrets.toml
+*.xlsx
+*.DS_Store
+*.db-shm
+*.db-wal
+campana_ejemplo.yaml
