@@ -41,11 +41,23 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_by TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS generated_images (
+    id BIGSERIAL PRIMARY KEY,
+    variant_id BIGINT NOT NULL REFERENCES variants(id) ON DELETE CASCADE,
+    format_name TEXT NOT NULL,
+    aspect_ratio TEXT NOT NULL,
+    image_url TEXT NOT NULL,
+    prompt_used TEXT DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(variant_id, format_name)
+);
+
 -- Indexes
 
 CREATE INDEX IF NOT EXISTS idx_variants_campaign ON variants(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_variant ON feedback(variant_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_rating ON feedback(rating);
+CREATE INDEX IF NOT EXISTS idx_images_variant ON generated_images(variant_id);
 
 -- RLS: allow all access (internal tool, no user auth)
 
@@ -56,6 +68,9 @@ ALTER TABLE feedback ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all on campaigns" ON campaigns FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on variants" ON variants FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on feedback" ON feedback FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE generated_images ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all on generated_images" ON generated_images FOR ALL USING (true) WITH CHECK (true);
 
 -- ============================================================
 -- RPC Functions (complex queries used by the learning system)

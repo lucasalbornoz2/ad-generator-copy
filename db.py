@@ -203,6 +203,50 @@ def get_rejected_patterns(formato, field_name, limit=10):
     return result.data
 
 
+# ---------------------------------------------------------------------------
+# Generated Images
+# ---------------------------------------------------------------------------
+
+def save_image(variant_id, format_name, aspect_ratio, image_url, prompt_used=""):
+    """Save a generated image. Upserts by variant_id + format_name."""
+    client = _get_client()
+    data = {
+        "variant_id": variant_id,
+        "format_name": format_name,
+        "aspect_ratio": aspect_ratio,
+        "image_url": image_url,
+        "prompt_used": prompt_used,
+    }
+    client.table("generated_images").upsert(
+        data, on_conflict="variant_id,format_name"
+    ).execute()
+
+
+def get_images_for_variant(variant_id):
+    """Get all generated images for a variant."""
+    client = _get_client()
+    result = (
+        client.table("generated_images")
+        .select("*")
+        .eq("variant_id", variant_id)
+        .order("format_name")
+        .execute()
+    )
+    return result.data
+
+
+def get_images_for_campaign(campaign_id):
+    """Get all generated images for a campaign (via variant join)."""
+    client = _get_client()
+    result = (
+        client.table("generated_images")
+        .select("*, variants!inner(campaign_id, territorio, field_name, position)")
+        .eq("variants.campaign_id", campaign_id)
+        .execute()
+    )
+    return result.data
+
+
 def get_feedback_stats():
     """Get overall feedback statistics."""
     client = _get_client()

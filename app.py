@@ -4,7 +4,7 @@ import json
 import streamlit as st
 
 from config import (
-    AD_SPECS, CANAL_FORMATS, is_meta_format,
+    AD_SPECS, CANAL_FORMATS, IMAGE_FORMATS, is_meta_format,
 )
 from brand_parser import STYLE_GUIDE
 from generate_ads import (
@@ -18,7 +18,9 @@ from db import (
     get_variants, get_feedback_for_campaign,
     list_campaigns, get_feedback_stats,
     get_approved_variants, update_variant_text,
+    save_image, get_images_for_variant,
 )
+from image_generator import generate_variant_images
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -156,6 +158,15 @@ def _field_feedback_controls(db_variants, field_name, field_label, v_idx, territ
         )
 
 
+def _extract_variant_copy(ads, v_idx):
+    """Extract copy texts from a variant for the image prompt builder."""
+    result = {}
+    for field in ("post_copy", "copy_imagen", "encabezado", "descripcion"):
+        values = ads.get(field, [])
+        result[field] = values[v_idx] if v_idx < len(values) else ""
+    return result
+
+
 def _display_meta_variants(ads, formato, campaign_id, territorio):
     """Display Meta ad variants with per-field feedback controls."""
     db_variants = get_variants(campaign_id, territorio)
@@ -190,6 +201,54 @@ def _display_meta_variants(ads, formato, campaign_id, territorio):
 
                 # Feedback per field
                 _field_feedback_controls(db_variants, field_name, field_label, v_idx, territorio, formato)
+
+            # --- Image generation section ---
+            st.markdown("---")
+            st.markdown("**Imagen del anuncio**")
+
+            img_formats = st.multiselect(
+                "Formatos",
+                options=list(IMAGE_FORMATS.keys()),
+                default=["feed"],
+                key=f"img_fmt_{territorio}_{v_idx}",
+            )
+
+            # Show existing images for this variant
+            # Use copy_imagen variant ID as anchor (first image-relevant field)
+            copy_imagen_variants = db_variants.get("copy_imagen", [])
+            vid = copy_imagen_variants[v_idx]["id"] if v_idx < len(copy_imagen_variants) else None
+
+            if vid:
+                existing_images = get_images_for_variant(vid)
+                if existing_images:
+                    cols = st.columns(len(existing_images))
+                    for col, img in zip(cols, existing_images):
+                        with col:
+                            st.image(img["image_url"], caption=img["format_name"], use_container_width=True)
+
+            if st.button("Generar imagen", key=f"gen_img_{territorio}_{v_idx}"):
+                if not vid:
+                    st.warning("Guarda la campana primero para generar imagenes.")
+                elif not img_formats:
+                    st.warning("Selecciona al menos un formato de imagen.")
+                else:
+                    with st.spinner("Generando imagen con IA..."):
+                        try:
+                            copy_data = _extract_variant_copy(ads, v_idx)
+                            campaign = st.session_state.campaign
+                            results = generate_variant_images(campaign, copy_data, img_formats)
+                            for fmt_name, img_data in results.items():
+                                save_image(
+                                    vid,
+                                    fmt_name,
+                                    IMAGE_FORMATS[fmt_name]["aspect_ratio"],
+                                    img_data["url"],
+                                    img_data["prompt"],
+                                )
+                            st.success("Imagen generada correctamente.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error generando imagen: {e}")
 
 
 def _display_google_ads_variants(ads, formato, campaign_id, territorio):

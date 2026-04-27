@@ -1,6 +1,127 @@
 """Parses brand book content into a style guide for ad generation."""
 
 
+# ---------------------------------------------------------------------------
+# Visual identity — colors, typography, and style from the Skydropx brandbook
+# ---------------------------------------------------------------------------
+
+VISUAL_IDENTITY = {
+    # --- Color palette (extracted from 300+ approved ads) ---
+    "primary_color": "#6B46C1",          # Deep purple/violet — dominant brand color
+    "secondary_color": "#00D9A3",        # Bright cyan/turquoise — accents & CTAs
+    "accent_magenta": "#FF4757",         # Magenta/pink — emphasis, discount badges
+    "gradient_start": "#6B46C1",         # Purple gradient start
+    "gradient_end": "#FF6B9D",           # Pink gradient end
+    "background_dark": "#0A1E3F",        # Dark navy — enterprise tier backgrounds
+    "background_light": "#F5F5FA",       # Light backgrounds for product focus
+    "text_primary": "#FFFFFF",           # White text on colored backgrounds (95%+ of ads)
+    "text_dark": "#1A1A2E",              # Dark text on light backgrounds
+    "cta_color": "#00D9A3",              # Cyan/turquoise CTA buttons
+    "cta_alt_color": "#8B5CF6",          # Purple CTA buttons (enterprise)
+    "neon_accent": "#FFB800",            # Orange/gold neon for discounts
+    # --- Typography ---
+    "font_primary": "Montserrat Bold",   # Clean modern sans-serif
+    "font_weight_headline": "Extra Bold",
+    "font_weight_body": "Regular",
+    # --- Visual style ---
+    "style": "Modern gradient + 3D isometric hybrid, tech-forward, vibrant",
+    "dominant_visual_elements": [
+        "3D isometric cardboard boxes (primary symbol, 70%+ of ads)",
+        "Purple-to-pink gradient backgrounds",
+        "Floating particles and confetti (purple, pink, gold)",
+        "Neon glow effects on text and objects",
+        "Dashboard/UI mockups showing the platform",
+        "Delivery vans and trucks (purple/pink colored)",
+        "Rounded cyan/turquoise CTA pill buttons with cursor icon",
+        "Laptops and smartphones showing Skydropx interface",
+    ],
+    "composition_patterns": [
+        "Logo top-left or top-center (small, ~40-60px)",
+        "Main headline center-aligned, bold white text, 2-3 lines",
+        "Central visual/illustration (30-40% of width)",
+        "CTA button at bottom (rounded pill, cyan or purple)",
+        "Key benefit words highlighted in cyan color",
+        "Floating icons around central image",
+    ],
+    "enterprise_style": {
+        "palette": "Darker, sophisticated purple with dark overlays",
+        "imagery": "Team collaborating, manager at computer, warehouse",
+        "copy_tone": "Feature-rich, B2B vocabulary, sports metaphors",
+        "cta_tone": "Cotiza, Descubre, Centraliza, Evoluciona",
+    },
+    "avoid_visual": [
+        "Flat solid color backgrounds (always use gradients)",
+        "Generic stock photography without brand treatment",
+        "Cold corporate aesthetic without color/energy",
+        "Cluttered compositions without clear hierarchy",
+        "Real human faces (use abstract/conceptual instead for AI generation)",
+        "Left-aligned headlines (always center or right)",
+    ],
+}
+
+
+def build_image_style_prompt(tier):
+    """Build visual style context for image prompt generation based on 300+ approved ads."""
+    vi = VISUAL_IDENTITY
+    tier_data = STYLE_GUIDE["tiers"].get(tier, STYLE_GUIDE["tiers"][2])
+    is_enterprise = (tier == 1)
+
+    lines = [
+        "[BRAND VISUAL IDENTITY — Skydropx (from 300+ approved creatives)]",
+        f"Overall Style: {vi['style']}",
+        "",
+        "[COLOR PALETTE]",
+        f"Primary: {vi['primary_color']} (deep purple/violet — dominant brand color)",
+        f"Secondary: {vi['secondary_color']} (bright cyan/turquoise — accents & CTAs)",
+        f"Accent: {vi['accent_magenta']} (magenta/pink — emphasis)",
+        f"Gradient: {vi['gradient_start']} purple → {vi['gradient_end']} pink (most common background)",
+        f"Text: {vi['text_primary']} white on colored backgrounds",
+        f"CTA Button: {vi['cta_color']} cyan rounded pill shape",
+        f"Neon Accent: {vi['neon_accent']} (orange/gold for promotions)",
+        "",
+        "[TYPOGRAPHY]",
+        f"Font: {vi['font_primary']} (clean modern sans-serif)",
+        f"Headline: {vi['font_weight_headline']}, white, center-aligned, 2-3 lines max",
+        "Body: Regular weight, white or light gray, short punchy sentences",
+        "Key benefit words highlighted in cyan (#00D9A3)",
+        "",
+        "[DOMINANT VISUAL ELEMENTS]",
+    ]
+    for elem in vi["dominant_visual_elements"]:
+        lines.append(f"- {elem}")
+
+    lines += [
+        "",
+        "[COMPOSITION RULES]",
+    ]
+    for pattern in vi["composition_patterns"]:
+        lines.append(f"- {pattern}")
+
+    if is_enterprise:
+        ent = vi["enterprise_style"]
+        lines += [
+            "",
+            "[ENTERPRISE TIER SPECIFICS]",
+            f"Palette: {ent['palette']}",
+            f"Imagery: {ent['imagery']}",
+            f"Copy Tone: {ent['copy_tone']}",
+            f"CTA Tone: {ent['cta_tone']}",
+        ]
+
+    lines += [
+        "",
+        f"[TARGET AUDIENCE — Tier {tier}: {tier_data['name']}]",
+        f"{tier_data['description']}",
+        f"Tone: {tier_data['tone']}",
+        "",
+        "[AVOID — CRITICAL]",
+    ]
+    for item in vi["avoid_visual"]:
+        lines.append(f"- {item}")
+
+    return "\n".join(lines)
+
+
 STYLE_GUIDE = {
     "brand_positioning": "Ayudarte a crecer es nuestro origen y nuestro destino",
     "slogan": "Sea cual sea tu origen, llegamos contigo a tu destino.",

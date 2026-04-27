@@ -15,6 +15,7 @@ def _get_secret(key, default=""):
 GEMINI_API_KEY = _get_secret("GEMINI_API_KEY")
 SUPABASE_URL = _get_secret("SUPABASE_URL")
 SUPABASE_KEY = _get_secret("SUPABASE_KEY")
+FAL_API_KEY = _get_secret("FAL_API_KEY")
 
 BRAND_BOOK_PDF = os.environ.get(
     "BRAND_BOOK_PDF",
@@ -126,6 +127,17 @@ ENFOQUE_NARRATIVO_PROMPT = {
         "y hablar de como impacta al negocio del usuario."
     ),
     "n/a": "",
+}
+
+
+# ---------------------------------------------------------------------------
+# Image generation formats
+# ---------------------------------------------------------------------------
+
+IMAGE_FORMATS = {
+    "feed":      {"aspect_ratio": "1:1",  "width": 1080, "height": 1080},
+    "stories":   {"aspect_ratio": "9:16", "width": 1080, "height": 1920},
+    "landscape": {"aspect_ratio": "16:9", "width": 1200, "height": 628},
 }
 
 
